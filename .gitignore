@@ -1,0 +1,32 @@
+data/
+outputs/
+.venv/
+__pycache__/
+*.pyc
+reference/
+
+# Downloaded SICKLE datasets and model weights
+data/
+
+# Generated outputs
+outputs/
+
+# Cloned upstream SICKLE source
+reference/
+
+# Python environments and cache
+.venv/
+venv/
+__pycache__/
+*.pyc
+.ipynb_checkpoints/
+
+# Large binary files
+*.zip
+*.pt
+*.pth
+*.ckpt
+
+# Secrets
+.env
+.env.*
