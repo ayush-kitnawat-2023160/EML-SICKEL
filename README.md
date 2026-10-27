@@ -39,7 +39,7 @@ benchmarks; OLS/Ridge/LASSO/Elastic Net **do not require pretrained weights**.
 ## First audit (no third-party Python packages needed)
 
 ```bash
-cd /home/ayush/Desktop/SEM7/EML/Project
+cd ~/Desktop/College/sem-7/EML/EML-SICKEL
 python3 scripts/audit_dataset.py --dataset toy
 python3 scripts/audit_dataset.py --dataset full
 ```
@@ -72,13 +72,13 @@ filters. Do not silently use 351 as the regression sample size.
 
 ## Run the implemented feature extraction and baseline
 
-An existing local Python environment `~/miniconda3/envs/env1` has been used to
-run the pipeline. `rasterio` was added to that environment; the other required
-libraries are listed in `requirements.txt`.
+The existing Conda environment `~/miniconda3/envs/global` is used to run the
+pipeline. `rasterio` is installed in that environment; other required libraries
+are listed in `requirements.txt`.
 
 ```bash
-cd ~/Desktop/SEM7/EML/Project
-PY=~/miniconda3/envs/env1/bin/python
+cd ~/Desktop/College/sem-7/EML/EML-SICKEL
+PY=~/miniconda3/envs/global/bin/python
 
 # Verify algorithms and built outputs (no model training)
 $PY -m unittest discover -s tests -v
