@@ -178,6 +178,154 @@ class RegularizedEMLChecks(unittest.TestCase):
         self.assertTrue(audit.train_test_plot_overlap.eq(0).all())
         self.assertTrue(audit.train_rows.between(90, 120).all())
 
+    def test_matched_holdout_same_plots_no_train_overlap(self):
+        from cross_year_plot_disjoint import (
+            training_year_holdout, transfer_folds)
+        source = ROOT / "outputs/features/full_stage_features.csv"
+        if not source.exists():
+            self.skipTest("extracted full features missing")
+        full = pd.read_csv(source, dtype={"unique_id": str, "plot_id": str})
+        df = full.loc[full.split.eq("train")]
+        for src, dst in ((2019, 2020), (2020, 2019)):
+            all_same = set()
+            all_target = set()
+            for k, fit, target in transfer_folds(df, src, dst):
+                within = training_year_holdout(df, fit, target, src)
+                self.assertEqual(set(within.plot_id), set(target.plot_id))
+                self.assertTrue(set(fit.plot_id).isdisjoint(within.plot_id))
+                self.assertTrue(set(fit.plot_id).isdisjoint(target.plot_id))
+                self.assertEqual(set(within.year), {src})
+                self.assertEqual(set(target.year), {dst})
+                self.assertFalse(all_same & set(within.unique_id))
+                self.assertFalse(all_target & set(target.unique_id))
+                all_same |= set(within.unique_id)
+                all_target |= set(target.unique_id)
+            self.assertEqual(all_same, set(df.loc[df.year.eq(src)].unique_id))
+            self.assertEqual(all_target, set(df.loc[df.year.eq(dst)].unique_id))
+
+    def test_matched_scores_valid_on_simple_synthetic_data(self):
+        from cross_year_plot_disjoint import matched_scores
+        synthetic = pd.DataFrame({
+            "source_year": [2019] * 4 + [2020] * 4,
+            "evaluation": ["within_year"] * 2 + ["cross_year"] * 2
+                          + ["within_year"] * 2 + ["cross_year"] * 2,
+            "year": [2019, 2019, 2020, 2020, 2020, 2020, 2019, 2019],
+            "yield": [100., 200., 110., 220., 110., 220., 100., 200.],
+            "train_mean": [150.] * 8,
+            "train_rows": [9] * 8,
+            "plot_id": ["p1", "p2"] * 4,
+        })
+        from cross_year_plot_disjoint import MATCHED_MODELS
+        for name in MATCHED_MODELS:
+            if name != "train_mean":
+                synthetic[name] = synthetic["yield"]
+        result = matched_scores(synthetic)
+        self.assertEqual(len(result), 4 * len(MATCHED_MODELS))
+        exact = result.loc[result.model.eq("ridge_controls")]
+        self.assertTrue((exact.RMSE == 0).all())
+        self.assertTrue((exact.RMSE_normalized_by_target_sd == 0).all())
+
+    def test_saved_matched_predictions_reproduce_cross_year(self):
+        from cross_year_plot_disjoint import MATCHED_MODELS
+        folder = ROOT / "outputs/eml_penalties"
+        new_path = folder / "cross_year_matched_predictions.csv"
+        old_path = folder / "cross_year_plot_disjoint_predictions.csv"
+        if not new_path.exists() or not old_path.exists():
+            self.skipTest("matched experiment not yet run")
+        combined = pd.read_csv(new_path, dtype={"unique_id": str, "plot_id": str})
+        previously = pd.read_csv(old_path, dtype={"unique_id": str, "plot_id": str})
+        self.assertEqual(len(combined), 564)
+        self.assertEqual(combined.groupby("evaluation").size().to_dict(),
+                         {"within_year": 282, "cross_year": 282})
+        for mode, subset in combined.groupby("evaluation"):
+            self.assertTrue(subset.unique_id.is_unique)
+            self.assertEqual(subset.plot_id.nunique(), 117)
+        cross = combined.loc[combined.evaluation.eq("cross_year")].set_index(
+            ["source_year", "unique_id"]).sort_index()
+        previously = previously.set_index(["source_year", "unique_id"]).sort_index()
+        self.assertTrue(cross.index.equals(previously.index))
+        for name in MATCHED_MODELS:
+            np.testing.assert_allclose(cross[name], previously[name], atol=1e-6)
+        audit = pd.read_csv(folder / "cross_year_matched_fold_audit.csv")
+        self.assertEqual(len(audit), 10)
+        self.assertTrue(audit.identical_heldout_plot_sets.all())
+        self.assertTrue(audit.training_test_plot_overlap.eq(0).all())
+
+    def test_shift_and_matched_summary_only_training_years(self):
+        folder = ROOT / "outputs/eml_penalties"
+        summary_path = folder / "cross_year_matched_comparison.csv"
+        if not summary_path.exists():
+            self.skipTest("matched experiment not yet run")
+        outcome = pd.read_csv(summary_path)
+        self.assertEqual(len(outcome), 32)
+        self.assertEqual(set(outcome.source_year), {2019, 2020})
+        self.assertTrue(outcome.RMSE.notna().all())
+        missingness = pd.read_csv(folder / "cross_year_feature_shift.csv")
+        self.assertEqual(len(missingness), 57)
+        self.assertTrue(missingness.missing_rate_2019.between(0, 1).all())
+        self.assertTrue(missingness.missing_rate_2020.between(0, 1).all())
+        coverage = pd.read_csv(folder / "cross_year_sensor_window_coverage.csv")
+        self.assertEqual(len(coverage), 30)
+        self.assertEqual(set(coverage.year), {2019, 2020})
+
+    def test_predeclared_stable_eml_features_exclude_landsat(self):
+        from cross_year_plot_disjoint import (
+            S1S2, STABLE20, STABLE_MODELS, STABLE_PENALIZED)
+        self.assertEqual(len(S1S2), 40)
+        self.assertEqual(len(STABLE20), 20)
+        self.assertEqual(len(STABLE_MODELS), 5)
+        self.assertEqual(len(set(S1S2)), 40)
+        self.assertTrue(set(STABLE20).issubset(S1S2))
+        for feature in S1S2:
+            self.assertNotIn("__l8_", feature)
+            self.assertNotIn("yield", feature)
+        self.assertEqual(set(STABLE_PENALIZED[1].allowed_features), set(STABLE20))
+
+    def test_stable_eml_masks_every_nonselected_feature_even_on_test(self):
+        from cross_year_plot_disjoint import STABLE20
+        path = ROOT / "outputs/features/full_stage_features.csv"
+        if not path.exists():
+            self.skipTest("extracted features missing")
+        frame = pd.read_csv(path).query("split == 'train'").reset_index(drop=True)
+        train = frame.loc[frame.year.eq(2019)].iloc[:90]
+        y = train["yield"].to_numpy(float)
+        fitted = PreparedFit(train, y, expanded=False, cross_year=True,
+                             allowed_features=STABLE20)
+        self.assertEqual(fitted.control_numeric, ["area"])
+        unseen = frame.loc[frame.year.eq(2020)].iloc[[1]].copy()
+        first = fitted.matrices(unseen)[1]
+        mutated = unseen.copy()
+        for col in BASE:
+            if col not in STABLE20:
+                mutated.loc[:, col] = 1e12
+        second = fitted.matrices(mutated)[1]
+        np.testing.assert_array_equal(first, second)
+
+    def test_stable_eml_saved_predictions_align_with_matched_baseline(self):
+        folder = ROOT / "outputs/eml_penalties"
+        path = folder / "cross_year_stable_eml_predictions.csv"
+        if not path.exists():
+            self.skipTest("stable EML experiments not run")
+        from cross_year_plot_disjoint import STABLE_MODELS
+        prediction = pd.read_csv(path, dtype={"unique_id": str, "plot_id": str})
+        baseline = pd.read_csv(folder / "cross_year_matched_predictions.csv",
+                               dtype={"unique_id": str, "plot_id": str})
+        keys = ["source_year", "evaluation", "unique_id"]
+        self.assertEqual(len(prediction), 564)
+        self.assertFalse(prediction[keys].duplicated().any())
+        self.assertEqual(
+            set(map(tuple, prediction[keys].to_numpy())),
+            set(map(tuple, baseline[keys].to_numpy())))
+        self.assertTrue(np.isfinite(prediction[list(STABLE_MODELS)]).all().all())
+        for col in ("ridge_controls", "ridge_controls_satellites",
+                    "extratrees_controls", "nonlinear_adaptive_lasso"):
+            joined = prediction[keys + [col]].merge(
+                baseline[keys + [col]], on=keys, validate="one_to_one",
+                suffixes=("_new", "_old"))
+            np.testing.assert_allclose(joined[f"{col}_new"],
+                                       joined[f"{col}_old"],
+                                       rtol=0, atol=1e-9)
+
     def test_controls_not_penalized(self):
         source = ROOT / "outputs/features/full_stage_features.csv"
         if not source.is_file():

@@ -101,6 +101,7 @@ class Experiment:
     penalize_agro_interactions: bool = False
     trajectory: bool = False
     allowed_sensors: tuple | None = None
+    allowed_features: tuple | None = None
 
 
 EXPERIMENTS = [
@@ -197,12 +198,14 @@ def scad_objective(gram, linear, beta, lam, a=SCAD_A):
 
 class PreparedFit:
     def __init__(self, train, y, expanded, penalize_agro_interactions=False,
-                 trajectory=False, allowed_sensors=None, cross_year=False):
+                 trajectory=False, allowed_sensors=None, cross_year=False,
+                 allowed_features=None):
         train = add_control_columns(train)
         self.expanded = expanded
         self.penalize_agro_interactions = penalize_agro_interactions
         self.trajectory = trajectory
         self.allowed_sensors = allowed_sensors
+        self.allowed_features = allowed_features
         self.cross_year = cross_year
         self.n = len(train)
         self.numimp = SimpleImputer(strategy="median", keep_empty_features=True)
@@ -282,10 +285,11 @@ class PreparedFit:
     def _raw_base(self, frame):
         base = frame[list(BASE)].apply(pd.to_numeric, errors="coerce").to_numpy(
             dtype=float, copy=True)
-        if self.allowed_sensors is not None:
+        if self.allowed_sensors is not None or self.allowed_features is not None:
             for col, name in enumerate(BASE):
                 sensor = name.rsplit("__", 1)[1].split("_", 1)[0]
-                if sensor not in self.allowed_sensors:
+                if ((self.allowed_sensors is not None and sensor not in self.allowed_sensors)
+                        or (self.allowed_features is not None and name not in self.allowed_features)):
                     base[:, col] = np.nan
         return base
 
@@ -378,7 +382,8 @@ def tune(frame, y, groups, experiment, cross_year=False):
         prepared.append((PreparedFit(frame.iloc[itrain], y[itrain], experiment.expanded,
                                      experiment.penalize_agro_interactions,
                                      experiment.trajectory, experiment.allowed_sensors,
-                                     cross_year=cross_year),
+                                     cross_year=cross_year,
+                                     allowed_features=experiment.allowed_features),
                          frame.iloc[ival], ival))
     rows = []
     for fraction, ratio in candidates(experiment):
